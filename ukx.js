@@ -74,23 +74,22 @@ const Layers = {
   rot13: { f: s=>rot13(s), r: s=>rot13(s) },
   hex: { f: s=>strToHex(s), r: s=>hexToStr(s) },
   b64enc: { f: s=>btoa(s), r: s=>atob(s) },
-  addNoise: {
-    f: (s, ctx)=>{
-      if(!ctx?.seedUint8) return s;
-      const prng = xs128plus(ctx.seedUint8.slice(0,16));
-      const arr = s.split('');
-      for(let i=0;i<arr.length;i++) arr[i] += String.fromCharCode(33 + prng.nextInt(94));
-      return arr.join('');
-    },
-    r: (s, ctx)=>{
-      if(!ctx?.seedUint8 || !ctx?.realLen) throw new Error('Missing seed or realLen for noise removal');
-      const prng = xs128plus(ctx.seedUint8.slice(0,16));
-      const arr = s.split('');
-      const out = new Array(ctx.realLen);
-      for(let i=0;i<ctx.realLen;i++) out[i] = arr[i][0]; // chỉ lấy ký tự gốc
-      return out.join('');
-    }
+addNoise: {
+  f: (s, ctx)=>{
+    if(!ctx?.seedUint8) return s;
+    const prng = xs128plus(ctx.seedUint8.slice(0,16));
+    const bytes = Array.from(s).map(c=>c.charCodeAt(0));
+    const out = bytes.map((b,i)=>b ^ prng.nextInt(256)); // XOR với PRNG
+    return btoa(String.fromCharCode(...out));
+  },
+  r: (s, ctx)=>{
+    if(!ctx?.seedUint8) throw new Error('Missing seed for noise removal');
+    const prng = xs128plus(ctx.seedUint8.slice(0,16));
+    const bytes = Array.from(atob(s)).map(c=>c.charCodeAt(0));
+    const out = bytes.map((b,i)=>b ^ prng.nextInt(256));
+    return String.fromCharCode(...out);
   }
+}
 };
 
 // ---------- layer sequence ----------
