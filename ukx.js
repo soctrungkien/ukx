@@ -1,6 +1,5 @@
 // ukx.js
-// Browser: AES-GCM + PBKDF2 + HMAC + 20 reversible layers (includes encodeURIComponent / decodeURIComponent and SAML-like wrappers)
-
+// Browser: AES-GCM + PBKDF2 + HMAC + 20 reversible layers
 const DEFAULT_ITER = 200000;
 const SALT_BYTES = 16;
 const NONCE_BYTES = 12;
@@ -19,7 +18,12 @@ function hexToStr(hex){
   for(let i=0;i<hex.length;i+=2) out.push(String.fromCharCode(parseInt(hex.slice(i,i+2),16)));
   return out.join('');
 }
-function rot13(s){ return s.replace(/[A-Za-z]/g, c=>String.fromCharCode((c<='Z'?'A':'a').charCodeAt(0) + (c.toLowerCase()<='m'?13:-13) + (c<='Z'?0:0))); }
+function rot13(s) {
+  return s.replace(/[a-zA-Z]/g, c => {
+    const base = c <= 'Z' ? 65 : 97;
+    return String.fromCharCode((c.charCodeAt(0) - base + 13) % 26 + base);
+  });
+}
 
 // ---------- derive AES + HMAC keys ----------
 async function deriveKeys(password, salt, iterations){
@@ -64,21 +68,10 @@ function xs128plus(seed16){
 }
 
 // ---------- reversible layer functions (forward / reverse) ----------
-// Each layer receives and returns a STRING
 const Layers = {
-  // 1 base64 pass-through (we assume input is base64 at start)
-  b64: {
-    f: s => s,
-    r: s => s
-  },
-  rev: {
-    f: s => s.split('').reverse().join(''),
-    r: s => s.split('').reverse().join('')
-  },
-  enc_uri: {
-    f: s => encodeURIComponent(s),
-    r: s => decodeURIComponent(s)
-  },
+  b64: { f: s => s, r: s => s },
+  rev: { f: s => s.split('').reverse().join(''), r: s => s.split('').reverse().join('') },
+  enc_uri: { f: s => encodeURIComponent(s), r: s => decodeURIComponent(s) },
   saml_wrap: {
     f: s => `<saml:Assertion>${s}</saml:Assertion>`,
     r: s => {
@@ -87,39 +80,22 @@ const Layers = {
       return m[1];
     }
   },
-  rot13: {
-    f: s => rot13(s),
-    r: s => rot13(s)
-  },
-  hex: {
-    f: s => strToHex(s),
-    r: s => hexToStr(s)
-  },
-  b64enc: {
-    f: s => btoa(s),
-    r: s => atob(s)
-  },
+  rot13: { f: s => rot13(s), r: s => rot13(s) },
+  hex: { f: s => strToHex(s), r: s => hexToStr(s) },
+  b64enc: { f: s => btoa(s), r: s => atob(s) },
   addNoise: {
-    // noise insertion deterministic by seedUint8
     f: (s, ctx) => {
-      // ctx.seedUint8 must be provided
-      if(!ctx || !ctx.seedUint8) {
-        // fallback random simple noise
-        return s.split('').map((ch,i)=> ch + String.fromCharCode(33 + (i%15))).join('');
-      }
+      if(!ctx || !ctx.seedUint8) return s.split('').map((ch,i)=> ch + String.fromCharCode(33 + (i%15))).join('');
       const prng = xs128plus(ctx.seedUint8.slice(0,16));
       const T = Math.max(s.length + Math.floor(s.length * (ctx.blowup||0.5)), s.length+4);
       const arr = new Array(T).fill(null);
-      // fill with random printable
       for(let i=0;i<T;i++) arr[i] = String.fromCharCode(33 + prng.nextInt(94));
-      // pick positions for real chars: first s.length positions of permutation
       const idx = Array.from({length:T}, (_,i)=>i);
       for(let i=T-1;i>0;i--){ const j=prng.nextInt(i+1); [idx[i],idx[j]]=[idx[j],idx[i]]; }
       for(let k=0;k<s.length;k++) arr[idx[k]] = s[k];
       return arr.join('');
     },
     r: (s, ctx) => {
-      // need to reconstruct permutation to extract real chars
       if(!ctx || !ctx.seedUint8) throw new Error('Missing seed for noise removal');
       const prng = xs128plus(ctx.seedUint8.slice(0,16));
       const T = s.length;
@@ -127,7 +103,6 @@ const Layers = {
       for(let i=T-1;i>0;i--){ const j=prng.nextInt(i+1); [idx[i],idx[j]]=[idx[j],idx[i]]; }
       const L = ctx.realLen;
       if(!L) throw new Error('Missing real length in context');
-      // extract real chars at positions idx[0..L-1]
       const out = new Array(L);
       for(let k=0;k<L;k++) out[k] = s[idx[k]];
       return out.join('');
@@ -140,21 +115,14 @@ const Layers = {
       return a.join('');
     },
     r: s => {
-      // swapping pairs twice restores
       const a = s.split('');
       for(let i=0;i+1<a.length;i+=2) [a[i],a[i+1]]=[a[i+1],a[i]];
       return a.join('');
     }
   },
-  json_wrap: {
-    f: s => JSON.stringify({d:s}),
-    r: s => {
-      try { return JSON.parse(s).d; } catch { throw new Error('JSON unwrap fail'); }
-    }
-  },
+  json_wrap: { f: s => JSON.stringify({d:s}), r: s => { try { return JSON.parse(s).d; } catch { throw new Error('JSON unwrap fail'); } } },
   simple_xor: {
     f: (s, ctx) => {
-      // xor bytes of string with repeating seed bytes then base64 encode result
       const key = ctx && ctx.xorKey ? ctx.xorKey : [0x55,0xAA];
       const bytes = Array.from(s).map(ch=>ch.charCodeAt(0));
       const out = bytes.map((b,i)=> b ^ key[i % key.length]);
@@ -195,7 +163,6 @@ export async function encryptSuper(plainText, password, opts = {}) {
   const base = bufToB64(ctBytes);
 
   // 4) prepare context for layers
-  // seed for deterministic noise & xor derived from HMAC of (password,salt,nonce)
   const seedFull = await hmacSign(hmacRaw, encoder.encode('seed|' + bufToB64(salt) + '|' + bufToB64(nonce)));
   const seedUint8 = seedFull.slice(0,16);
   const ctx = { seedUint8, blowup, realLen: ctBytes.length, xorKey: Array.from(seedFull.slice(0,4)) };
@@ -205,22 +172,19 @@ export async function encryptSuper(plainText, password, opts = {}) {
   for (const name of LAYER_SEQUENCE) {
     const layer = Layers[name];
     if (!layer) throw new Error('Unknown layer ' + name);
-    // call f with (s, ctx) if f expects ctx
     s = layer.f.length >= 2 ? layer.f(s, ctx) : layer.f(s);
-    // note: some layers (addNoise) rely on ctx which includes realLen
   }
 
-  // 6) build header and HMAC over header + final string
-  const header = `UKX_SUPER|i=${iterations}|S=${bufToB64(salt)}|N=${bufToB64(nonce)}|L=${ctBytes.length}|SEQ=${LAYER_SEQUENCE.join(',')}`;
+  // 6) build header and HMAC over header + final string (include blowup B)
+  const header = `UKX_SUPER|i=${iterations}|S=${bufToB64(salt)}|N=${bufToB64(nonce)}|B=${blowup}|L=${ctBytes.length}|SEQ=${LAYER_SEQUENCE.join(',')}`;
   const macRaw = await hmacSign(hmacRaw, encoder.encode(header + '|' + s));
   const macB64 = bufToB64(macRaw);
 
-  // 7) final token: markers + header + mac + payload
+  // 7) final token
   return `<<<UKXS>>>${header}<<<MAC>>>${macB64}<<<DATA>>>${s}<<<END>>>`;
 }
 
 export async function decryptSuper(token, password) {
-  // parse
   const m = token.match(/<<<UKXS>>>(.*?)<<<MAC>>>(.*?)<<<DATA>>>(.*?)<<<END>>>/s);
   if (!m) throw new Error('Token invalid / missing markers');
   const header = m[1];
@@ -236,6 +200,7 @@ export async function decryptSuper(token, password) {
   const iterations = parseInt(kv['i'],10);
   const salt = b64ToBuf(kv['S']);
   const nonce = b64ToBuf(kv['N']);
+  const blowup = parseFloat(kv['B'] ?? '1.8');
   const L = parseInt(kv['L'],10);
 
   const { aesKey, hmacRaw } = await deriveKeys(password, salt, iterations);
@@ -244,11 +209,11 @@ export async function decryptSuper(token, password) {
   const mac = b64ToBuf(macB64);
   if (expectedMac.length !== mac.length || !expectedMac.every((b,i)=>b===mac[i])) throw new Error('MAC mismatch — wrong password or tampered');
 
-  // rebuild ctx (seed)
+  // rebuild ctx (seed) with blowup from header
   const seedFull = await hmacSign(hmacRaw, encoder.encode('seed|' + bufToB64(salt) + '|' + bufToB64(nonce)));
-  const ctx = { seedUint8: seedFull.slice(0,16), blowup: 1.8, realLen: L, xorKey: Array.from(seedFull.slice(0,4)) };
+  const ctx = { seedUint8: seedFull.slice(0,16), blowup, realLen: L, xorKey: Array.from(seedFull.slice(0,4)) };
 
-  // reverse layers (apply reverse in opposite order)
+  // reverse layers
   for (let i = LAYER_SEQUENCE.length - 1; i >= 0; i--) {
     const name = LAYER_SEQUENCE[i];
     const layer = Layers[name];
@@ -258,7 +223,6 @@ export async function decryptSuper(token, password) {
 
   // final payload should be base64 of ciphertext
   const ctBytes = b64ToBuf(payload);
-  // decrypt AES-GCM
   try {
     const ptBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv: nonce, additionalData: salt, tagLength:128}, aesKey, ctBytes);
     return decoder.decode(ptBuf);
@@ -267,5 +231,5 @@ export async function decryptSuper(token, password) {
   }
 }
 
-export { encrypt, decrypt, encryptSuper, decryptSuper };
-export default { encrypt, decrypt, encryptSuper, decryptSuper };
+export { encryptSuper, decryptSuper };
+export default { encryptSuper, decryptSuper };
