@@ -231,4 +231,4 @@ export async function decrypt(token, password) {
   }
 }
 
-export { encrypt, decrypt };
+// shit export { encrypt, decrypt };
