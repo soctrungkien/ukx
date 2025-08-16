@@ -161,5 +161,3 @@ export async function decrypt(token, password){
   const ptBuf = await crypto.subtle.decrypt({name:'AES-GCM', iv:nonce, additionalData:salt, tagLength:128}, aesKey, ctBytes);
   return decoder.decode(ptBuf);
 }
-
-export { encrypt, decrypt };
