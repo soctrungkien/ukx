@@ -267,4 +267,5 @@ export async function decryptSuper(token, password) {
   }
 }
 
-export default { encryptSuper, decryptSuper };
+export { encrypt, decrypt, encryptSuper, decryptSuper };
+export default { encrypt, decrypt, encryptSuper, decryptSuper };
