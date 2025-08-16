@@ -146,7 +146,7 @@ const LAYER_SEQUENCE = [
 ];
 
 // ---------- high-level encrypt/decrypt that use AES-GCM then layers ----------
-export async function encryptSuper(plainText, password, opts = {}) {
+export async function encrypt(plainText, password, opts = {}) {
   const iterations = opts.iterations ?? DEFAULT_ITER;
   const blowup = opts.blowup ?? 1.8;
 
@@ -184,7 +184,7 @@ export async function encryptSuper(plainText, password, opts = {}) {
   return `<<<UKXS>>>${header}<<<MAC>>>${macB64}<<<DATA>>>${s}<<<END>>>`;
 }
 
-export async function decryptSuper(token, password) {
+export async function decrypt(token, password) {
   const m = token.match(/<<<UKXS>>>(.*?)<<<MAC>>>(.*?)<<<DATA>>>(.*?)<<<END>>>/s);
   if (!m) throw new Error('Token invalid / missing markers');
   const header = m[1];
@@ -231,5 +231,4 @@ export async function decryptSuper(token, password) {
   }
 }
 
-export { encryptSuper, decryptSuper };
-export default { encryptSuper, decryptSuper };
+export { encrypt, decrypt };
